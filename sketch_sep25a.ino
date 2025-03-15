@@ -11,7 +11,7 @@ Adafruit_SSD1306 display(128, 64, &Wire, 2);
 
 //-----------------------------------------------
 int flowMinutes = 0;   // Total flow minutes
-int menuIndex = 0;     // 0 for UP, 1 for DOWN, 2 for Reset
+int menuIndex = 0;     // 0 for UP, 1 for DOWN, 2 for VAR, 3 for Reset
 String menuOptions[4] = {"UP", "DOWN", "VAR", "Reset"};  // Label reset option as "Reset"
 unsigned long lastActivityTime = 0;  // For inactivity detection
 const unsigned long inactivityLimit = 3 * 60000;  // 3 minutes in milliseconds
@@ -22,6 +22,7 @@ State currentState = MENU;
 int countdownValue = 20;  // Default value for countdown
 int initialCountdownValue = 20;  // Store the countdown value when selected
 unsigned long previousMillis = 0;  // For counting logic
+int carryOver = 0; // For var if you switch mid counting
 int elapsedMinutes = 0;
 bool isCounting = false;
 unsigned long buttonDebounceTime = 0;
@@ -264,8 +265,13 @@ void resetFlowMinutes() {
 //=========================================================
 // Handle counting up or down logic
 void handleCounting(unsigned long currentMillis) {
-  if (!isCounting || (currentMillis - previousMillis < 60000)) return;
-
+  if (carryOver != 0) {
+    if (!isCounting || (currentMillis - previousMillis < 60000 - (60000-carryOver))) return;
+  } else {
+    if (!isCounting || (currentMillis - previousMillis < 60000)) return;
+  }
+  
+  carryOver = 0;
   previousMillis = currentMillis;
   
   if (currentState == COUNTING_UP) {
@@ -391,14 +397,18 @@ void handleRotaryInput(unsigned long currentMillis) {
     Serial.print(" - Countdown value: "); Serial.println(countdownValue);
   } else if (currentState == VARIABLE_COUNTING_UP && rotation < 0) {
     currentState = VARIABLE_COUNTING_DOWN;
+    carryOver = currentMillis - previousMillis;
     previousMillis = currentMillis;
     updateDisplay();
     Serial.print(" - Counting DOWN now: "); Serial.println(elapsedMinutes);
+    Serial.print(" - Carry over: "); Serial.println(carryOver);
   } else if (currentState == VARIABLE_COUNTING_DOWN && rotation > 0) {
     currentState = VARIABLE_COUNTING_UP;
+    carryOver = currentMillis - previousMillis;
     previousMillis = currentMillis;
     updateDisplay();
     Serial.print(" - Counting UP now: "); Serial.println(elapsedMinutes);
+    Serial.print(" - Carry over: "); Serial.println(carryOver);
   }
 }
 //=========================================================
