@@ -2,21 +2,21 @@
 #include <Adafruit_SSD1306.h>
 
 //-----------------------------------------------
-Adafruit_SSD1306 display(128, 64, &Wire, D4);
+Adafruit_SSD1306 display(128, 64, &Wire, 2);
 
 //-----------------------------------------------
-#define CLK    D6
-#define DT     D7
-#define SW     D4
+#define CLK    12
+#define DT     13
+#define SW     2
 
 //-----------------------------------------------
 int flowMinutes = 0;   // Total flow minutes
 int menuIndex = 0;     // 0 for UP, 1 for DOWN, 2 for Reset
-String menuOptions[3] = {"UP", "DOWN", "Reset"};  // Label reset option as "Reset"
+String menuOptions[4] = {"UP", "DOWN", "VAR", "Reset"};  // Label reset option as "Reset"
 unsigned long lastActivityTime = 0;  // For inactivity detection
 const unsigned long inactivityLimit = 3 * 60000;  // 3 minutes in milliseconds
 
-enum State { MENU, COUNTING_UP, COUNTING_DOWN, SELECTING_DOWN_DURATION, IDLE };
+enum State { MENU, COUNTING_UP, COUNTING_DOWN, VARIABLE_COUNTING_UP, VARIABLE_COUNTING_DOWN, SELECTING_DOWN_DURATION, IDLE };
 State currentState = MENU;
 
 int countdownValue = 20;  // Default value for countdown
@@ -50,7 +50,7 @@ void loop() {
   unsigned long currentMillis = millis();
   
   // Handle rotary encoder input
-  handleRotaryInput();
+  handleRotaryInput(currentMillis);
 
   // Handle button presses and states
   handleButtonPresses(currentMillis);
@@ -90,10 +90,10 @@ void updateDisplay() {
 
   // Display top row
   String topRowText;
-  
-  if (currentState == COUNTING_UP) {
+  Serial.print(currentState);
+  if (currentState == COUNTING_UP || currentState == VARIABLE_COUNTING_UP) {
     topRowText = "Focus! \x18";  // Focus with upward triangle for counting UP
-  } else if (currentState == COUNTING_DOWN) {
+  } else if (currentState == COUNTING_DOWN || currentState == VARIABLE_COUNTING_DOWN) {
     topRowText = "Focus! \x19";  // Focus with downward triangle for counting DOWN
   } else {
     topRowText = "Flow: " + String(flowMinutes);  // Display total flow minutes when not counting
@@ -111,7 +111,7 @@ void updateDisplay() {
   
   if (currentState == MENU) {
     mainRowText = menuOptions[menuIndex];  // Display UP, DOWN, or Reset in the menu
-  } else if (currentState == COUNTING_UP) {
+  } else if (currentState == COUNTING_UP || currentState == VARIABLE_COUNTING_UP || currentState == VARIABLE_COUNTING_DOWN) {
     mainRowText = String(elapsedMinutes);  // Display counting up minutes
   } else if (currentState == COUNTING_DOWN || currentState == SELECTING_DOWN_DURATION) {
     mainRowText = String(countdownValue);  // Display countdown minutes
@@ -151,7 +151,9 @@ void handleButtonPresses(unsigned long currentMillis) {
         startCountingUp();
       } else if (menuIndex == 1) {  // DOWN selected
         startSelectingDownDuration();
-      } else if (menuIndex == 2) {  // Reset selected
+      } else if (menuIndex == 2) {
+        startVariableCountingDuration();
+      } else if (menuIndex == 3) {  // Reset selected
         resetFlowMinutes();  // Reset the total focus time to 0
       }
       break;
@@ -166,6 +168,13 @@ void handleButtonPresses(unsigned long currentMillis) {
 
     case COUNTING_DOWN:
       stopCountingDown();
+      break;
+    
+    case VARIABLE_COUNTING_UP:
+      stopCounting();
+      break;
+    case VARIABLE_COUNTING_DOWN:
+      stopCounting();
       break;
   }
   updateDisplay();
@@ -188,6 +197,16 @@ void startSelectingDownDuration() {
   countdownValue = 20;
   lastActivityTime = millis();  // Reset inactivity timer
   Serial.println("Selecting DOWN duration.");
+}
+
+//=========================================================
+// Start selecting the countdown duration
+void startVariableCountingDuration() {
+  currentState = VARIABLE_COUNTING_UP;
+  elapsedMinutes = 0;
+  isCounting = true;
+  lastActivityTime = millis();  // Reset inactivity timer
+  Serial.println("Variable: Counting UP started.");
 }
 
 //=========================================================
@@ -221,6 +240,20 @@ void stopCountingDown() {
 }
 
 //=========================================================
+// Stop counting down and return to menu
+void stopCounting() {
+  flowMinutes += elapsedMinutes;
+  if (elapsedMinutes > 0) {
+    successAnimation();
+  } else {
+    failedAnimation();
+  }
+  currentState = MENU;
+  isCounting = false;
+  Serial.println("Counting stopped. Returning to MENU.");
+}
+
+//=========================================================
 // Reset the total flow minutes counter to 0
 void resetFlowMinutes() {
   flowMinutes = 0;
@@ -250,6 +283,14 @@ void handleCounting(unsigned long currentMillis) {
     }
     updateDisplay();
     Serial.print("Counting DOWN: "); Serial.println(countdownValue);
+  } else if (currentState == VARIABLE_COUNTING_UP) {
+    elapsedMinutes++;
+    updateDisplay();
+    Serial.print("Counting UP: "); Serial.println(elapsedMinutes);
+  } else if (currentState == VARIABLE_COUNTING_DOWN) {
+    elapsedMinutes--;
+    updateDisplay();
+    Serial.print("Counting UP: "); Serial.println(elapsedMinutes);
   }
 }
 
@@ -282,6 +323,33 @@ void successAnimation() {
 }
 
 //=========================================================
+// Failed animation when a session fails
+void failedAnimation() {
+  display.clearDisplay();
+  int centerX = 64, centerY = 32;
+
+  // Draw an "X" effect
+  for (int i = 0; i <= 30; i += 3) {
+    display.clearDisplay();
+    display.drawLine(centerX - i, centerY - i, centerX + i, centerY + i, WHITE);
+    display.drawLine(centerX - i, centerY + i, centerX + i, centerY - i, WHITE);
+    display.display();
+    delay(100);
+  }
+
+  // Display "FAILED!" message
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(25, 20);
+  display.print("FAILED!");
+  display.display();
+  delay(1000);
+  display.clearDisplay();
+  display.display();
+}
+
+
+//=========================================================
 // Rotary Encoder Rotation Detection
 int getRotation() {
   static int previousCLK = digitalRead(CLK);
@@ -302,7 +370,7 @@ int getRotation() {
 
 //=========================================================
 // Handle rotary input for menu and countdown selection
-void handleRotaryInput() {
+void handleRotaryInput(unsigned long currentMillis) {
   int rotation = getRotation();
   if (rotation == 0) return;  // No rotation detected
   
@@ -312,7 +380,7 @@ void handleRotaryInput() {
   Serial.println(rotation);
 
   if (currentState == MENU) {
-    menuIndex = (menuIndex + rotation + 3) % 3;  // Update for 3 menu options: UP, DOWN, Reset
+    menuIndex = (menuIndex + rotation + 4) % 4;  // Update for 4 menu options: UP, DOWN, VARIABLE, Reset
     updateDisplay();
     Serial.print(millis());  // Print the current time in milliseconds
     Serial.print(" - Menu option: "); Serial.println(menuOptions[menuIndex]);
@@ -321,6 +389,16 @@ void handleRotaryInput() {
     updateDisplay();
     Serial.print(millis());  // Print the current time in milliseconds
     Serial.print(" - Countdown value: "); Serial.println(countdownValue);
+  } else if (currentState == VARIABLE_COUNTING_UP && rotation < 0) {
+    currentState = VARIABLE_COUNTING_DOWN;
+    previousMillis = currentMillis;
+    updateDisplay();
+    Serial.print(" - Counting DOWN now: "); Serial.println(elapsedMinutes);
+  } else if (currentState == VARIABLE_COUNTING_DOWN && rotation > 0) {
+    currentState = VARIABLE_COUNTING_UP;
+    previousMillis = currentMillis;
+    updateDisplay();
+    Serial.print(" - Counting UP now: "); Serial.println(elapsedMinutes);
   }
 }
 //=========================================================
@@ -389,4 +467,3 @@ void handleInactivity(unsigned long currentMillis) {
     Serial.println(" - Exiting IDLE mode. Back to MENU.");
   }
 }
-
